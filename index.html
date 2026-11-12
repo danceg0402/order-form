@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<!--
+  webapp/index.html — Telegram Mini App: форма оформления заказа.
+
+  ВАЖНО: тарифы ниже (WORK_TYPES, ORIGINALITY, URGENCY) — только для
+  ОТОБРАЖЕНИЯ цены клиенту. Настоящую цену бот считает сам в keyboards.py
+  по ключам, которые присылает форма. Если меняете тарифы в keyboards.py —
+  поменяйте их и здесь, чтобы цифры на экране совпадали.
+
+  Как это работает:
+    1) Бот показывает кнопку-клавиатуру с web_app (keyboards.py → webapp_keyboard).
+    2) Telegram открывает эту страницу внутри чата.
+    3) Клиент заполняет форму, жмёт «Оформить заказ».
+    4) Telegram.WebApp.sendData(...) закрывает форму и отправляет боту JSON.
+    5) handlers.py → webapp_order ловит message.web_app_data и продолжает
+       оформление с шага загрузки файлов.
+-->
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Оформление заказа</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #18222d);
+    --text: var(--tg-theme-text-color, #ffffff);
+    --hint: var(--tg-theme-hint-color, #8a9aa9);
+    --card: var(--tg-theme-secondary-bg-color, #232e3c);
+    --accent: var(--tg-theme-button-color, #e8833a);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 16px 16px 110px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: var(--hint); font-size: 14px; margin-bottom: 18px; }
+  .section-title {
+    font-size: 12px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--hint);
+    margin: 18px 0 10px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    background: var(--card);
+    border: 1.5px solid transparent;
+    border-radius: 14px;
+    padding: 10px 14px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+    transition: all .15s ease;
+    user-select: none;
+  }
+  .chip .price { color: var(--hint); font-size: 12px; display: block; margin-top: 2px; }
+  .chip.active {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+  .chip.active .price { color: var(--accent-text); opacity: .85; }
+  textarea {
+    width: 100%;
+    background: var(--card);
+    border: 1.5px solid transparent;
+    border-radius: 14px;
+    color: var(--text);
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    outline: none;
+    min-height: 68px;
+  }
+  textarea:focus { border-color: var(--accent); }
+  textarea.error { border-color: #e05b4c; }
+  .stepper {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--card); border-radius: 14px;
+    padding: 8px; width: fit-content;
+  }
+  .stepper button {
+    width: 44px; height: 44px; border: none; border-radius: 11px;
+    background: var(--bg); color: var(--text);
+    font-size: 22px; cursor: pointer;
+  }
+  .stepper .pages { font-size: 17px; font-weight: 700; min-width: 72px; text-align: center; }
+  .stepper .pages small { display: block; font-weight: 400; font-size: 11px; color: var(--hint); }
+  .hint-pages { color: var(--hint); font-size: 12px; margin-top: 8px; }
+  .summary {
+    margin-top: 22px;
+    background: var(--card);
+    border-radius: 16px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--hint);
+    line-height: 1.7;
+  }
+  .summary .row { display: flex; justify-content: space-between; }
+  .summary .total {
+    display: flex; justify-content: space-between;
+    border-top: 1px solid rgba(255,255,255,.08);
+    margin-top: 8px; padding-top: 8px;
+    font-size: 16px; font-weight: 700; color: var(--text);
+  }
+  .note { color: var(--hint); font-size: 12px; margin-top: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>📝 Оформление заказа</h1>
+<div class="sub">Соберите заказ — цена пересчитывается сразу</div>
+
+<div class="section-title">Тип работы</div>
+<div class="chips" id="workTypes"></div>
+
+<div class="section-title">Тема работы</div>
+<textarea id="topic" maxlength="500" placeholder="Например: Анализ финансовой устойчивости предприятия"></textarea>
+
+<div class="section-title">Объём, страниц</div>
+<div class="stepper">
+  <button type="button" id="minus">−</button>
+  <div class="pages"><span id="pagesValue">25</span><small>страниц</small></div>
+  <button type="button" id="plus">+</button>
+</div>
+<div class="hint-pages" id="pagesHint"></div>
+
+<div class="section-title">Уникальность (антиплагиат)</div>
+<div class="chips" id="originality"></div>
+
+<div class="section-title">Срочность</div>
+<div class="chips" id="urgency"></div>
+
+<div class="summary" id="summary"></div>
+<div class="note">Файлы (методичку, задание) бот попросит следующим шагом в чате.<br>Там же можно будет применить промокод.</div>
+
+<script>
+// --- Тарифы: ДОЛЖНЫ совпадать с keyboards.py (см. комментарий в шапке) ---
+const WORK_TYPES = {
+  abstract:            { title: "📄 Реферат / Эссе",                         price: 3000, base_pages: 15, extra_page: 150 },
+  practice_study:      { title: "🛠 Отчёт по учебной практике",              price: 5000, base_pages: 20, extra_page: 180 },
+  practice_prod:       { title: "🏭 Отчёт по производственной практике",     price: 7000, base_pages: 25, extra_page: 200 },
+  coursework_theory:   { title: "📘 Курсовая (теория)",                      price: 7000, base_pages: 25, extra_page: 200 },
+  coursework_practice: { title: "📊 Курсовая (с практикой/расчётами)",       price: 9000, base_pages: 30, extra_page: 250 },
+};
+const ORIGINALITY = {
+  standard: { title: "До 60% (Стандарт)",           markup: 0 },
+  deep:     { title: "Более 80% (Глубокий рерайт)", markup: 1500 },
+};
+const URGENCY = {
+  normal: { title: "От 5 дней",        coef: 1.0,  label: "без наценки" },
+  fast:   { title: "Срочно (2–3 дня)", coef: 1.25, label: "+25%" },
+  rush:   { title: "Меньше 24 часов",  coef: 1.5,  label: "+50%" },
+};
+const MIN_PAGES = 5, MAX_PAGES = 200;
+
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+// --- Состояние формы ---
+const state = { work: "coursework_theory", pages: 25, orig: "standard", urg: "normal" };
+
+const fmt = (n) => Math.round(n).toLocaleString("ru-RU").replace(/ /g, " ") + " ₸";
+
+function calcPrice() {
+  const w = WORK_TYPES[state.work];
+  const extra = Math.max(0, state.pages - w.base_pages);
+  const subtotal = w.price + extra * w.extra_page + ORIGINALITY[state.orig].markup;
+  return Math.round(subtotal * URGENCY[state.urg].coef / 100) * 100; // как в keyboards.py
+}
+
+function renderChips(containerId, dict, activeKey, onPick, priceLine) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = "";
+  for (const [key, info] of Object.entries(dict)) {
+    const chip = document.createElement("div");
+    chip.className = "chip" + (key === activeKey ? " active" : "");
+    chip.innerHTML = info.title + (priceLine ? `<span class="price">${priceLine(info)}</span>` : "");
+    chip.onclick = () => { onPick(key); render(); };
+    el.appendChild(chip);
+  }
+}
+
+function render() {
+  renderChips("workTypes", WORK_TYPES, state.work,
+    (k) => {
+      state.work = k;
+      // при смене типа поднимаем объём до базового, если текущий меньше
+      if (state.pages < WORK_TYPES[k].base_pages) state.pages = WORK_TYPES[k].base_pages;
+    },
+    (i) => `от ${fmt(i.price)} · ${i.base_pages} стр. включено`);
+
+  renderChips("originality", ORIGINALITY, state.orig,
+    (k) => { state.orig = k; },
+    (i) => i.markup ? `+${fmt(i.markup)}` : "+0 ₸");
+
+  renderChips("urgency", URGENCY, state.urg,
+    (k) => { state.urg = k; },
+    (i) => i.label);
+
+  const w = WORK_TYPES[state.work];
+  document.getElementById("pagesValue").textContent = state.pages;
+  const extra = Math.max(0, state.pages - w.base_pages);
+  document.getElementById("pagesHint").textContent = extra
+    ? `${extra} стр. сверх базы: +${fmt(extra * w.extra_page)}`
+    : `Входит в базовую цену (до ${w.base_pages} стр.)`;
+
+  // Сводка
+  const rows = [`<div class="row"><span>База (${w.base_pages} стр.)</span><span>${fmt(w.price)}</span></div>`];
+  if (extra) rows.push(`<div class="row"><span>Доп. страницы ${extra} × ${fmt(w.extra_page)}</span><span>${fmt(extra * w.extra_page)}</span></div>`);
+  const om = ORIGINALITY[state.orig].markup;
+  if (om) rows.push(`<div class="row"><span>Глубокий рерайт</span><span>+${fmt(om)}</span></div>`);
+  const coef = URGENCY[state.urg].coef;
+  if (coef !== 1) rows.push(`<div class="row"><span>Срочность ×${coef}</span><span>+${Math.round((coef - 1) * 100)}%</span></div>`);
+  rows.push(`<div class="total"><span>Итого</span><span>${fmt(calcPrice())}</span></div>`);
+  document.getElementById("summary").innerHTML = rows.join("");
+
+  // Главная кнопка Telegram (нативная, внизу экрана — как в видео)
+  tg.MainButton.setParams({ text: `Оформить заказ · ${fmt(calcPrice())}`, is_visible: true });
+}
+
+// Степпер страниц
+document.getElementById("minus").onclick = () => { state.pages = Math.max(MIN_PAGES, state.pages - 5); render(); };
+document.getElementById("plus").onclick  = () => { state.pages = Math.min(MAX_PAGES, state.pages + 5); render(); };
+
+// Отправка данных боту
+tg.MainButton.onClick(() => {
+  const topic = document.getElementById("topic").value.trim();
+  if (topic.length < 3) {
+    document.getElementById("topic").classList.add("error");
+    document.getElementById("topic").focus();
+    if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+    return;
+  }
+  tg.sendData(JSON.stringify({
+    v: 1,                       // версия формата — на будущее
+    work_type: state.work,      // ключ из WORK_TYPES (цену бот посчитает сам)
+    topic: topic.slice(0, 500),
+    pages: state.pages,
+    originality: state.orig,    // ключ из ORIGINALITY
+    urgency: state.urg,         // ключ из URGENCY
+  }));
+});
+document.getElementById("topic").addEventListener("input", (e) => e.target.classList.remove("error"));
+
+render();
+</script>
+</body>
+</html>
